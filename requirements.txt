@@ -1,13 +1,21 @@
-openai>=1.0.0
-langchain>=1.0.0
-langchain-openai>=0.0.5
-langchain-community>=0.0.20
-langchain-text-splitters>=0.0.1
-langchain-core>=0.1.0
-chromadb>=0.4.0
-python-dotenv>=1.0.0
-pandas>=2.0.0
-numpy>=1.24.0
-pypdf>=3.0.0
-tiktoken>=0.5.0
-streamlit>=1.28.0
+# Core
+openai==2.16.0
+python-dotenv==1.2.1
+
+# LangChain
+langchain==1.2.7
+langchain-core==1.2.7
+langchain-openai==1.1.7
+langchain-community==0.4.1
+langchain-text-splitters==1.1.0
+
+# Vector store
+chromadb==1.4.1
+
+# Data & UI
+pandas==2.3.3
+numpy==2.4.2
+streamlit==1.53.1
+
+# Tokenization (used by OpenAI/LangChain)
+tiktoken==0.12.0

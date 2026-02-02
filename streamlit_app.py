@@ -6,10 +6,10 @@ Professional Streamlit dashboard for employee leave requests
 import streamlit as st
 import os
 import sqlite3
+import pandas as pd
 from datetime import date, timedelta, datetime
 from pathlib import Path
 from dotenv import load_dotenv
-import json
 
 # Load environment variables
 env_path = Path(__file__).parent / '.env'
@@ -64,13 +64,26 @@ st.markdown("""
             margin-bottom: 1.5rem;
         }
         
-        /* Enhanced form container */
+        /* Enhanced form container - bordered */
         .form-container {
             background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
             padding: 2.5rem;
             border-radius: 20px;
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e2e8f0;
+            border: 2px solid #cbd5e1;
+            border-left: 5px solid #1e40af;
+        }
+        /* Form section headers with icons */
+        .form-section-header {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #1e40af;
+            margin-bottom: 0.75rem;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
         
         /* Modern flow step cards */
@@ -322,8 +335,29 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'agent' not in st.session_state:
+# Initialize all session state variables in one place
+def _init_session_state():
+    defaults = {
+        "request_result": None,
+        "processing_steps": [],
+        "employee_email_draft": None,
+        "email_sent_status": None,
+        "email_custom_message": "",
+        "show_alternatives": False,
+        "show_split_form": False,
+        "show_better_dates": False,
+        "show_balance": False,
+        "show_policy": False,
+        "selected_employee_id": None,
+        "selected_employee_index": 0,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+_init_session_state()
+
+if "agent" not in st.session_state:
     with st.spinner("Initializing AI Agent..."):
         try:
             st.session_state.agent = VacationAgent()
@@ -334,39 +368,80 @@ if 'agent' not in st.session_state:
             st.error(f"Error initializing agent: {str(e)}")
             st.stop()
 
-if 'request_result' not in st.session_state:
-    st.session_state.request_result = None
-
-if 'processing_steps' not in st.session_state:
-    st.session_state.processing_steps = []
-
-if 'employee_email_draft' not in st.session_state:
-    st.session_state.employee_email_draft = None
-
-if 'email_sent_status' not in st.session_state:
-    st.session_state.email_sent_status = None
-
-if 'email_custom_message' not in st.session_state:
-    st.session_state.email_custom_message = ""
-
-if 'show_alternatives' not in st.session_state:
-    st.session_state.show_alternatives = False
-
-if 'show_split_form' not in st.session_state:
-    st.session_state.show_split_form = False
-
-if 'show_better_dates' not in st.session_state:
-    st.session_state.show_better_dates = False
-
 # Enhanced Header
 st.markdown('<h1 class="main-header">🏢 Corporate Vacation AI Agent</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Unified AI-powered leave management system with Tool → RAG integration</p>', unsafe_allow_html=True)
 
 # Enhanced Sidebar
 with st.sidebar:
+    # Employee Directory with search (at top)
+    st.markdown('### 👥 Employee Directory')
+    search_query = st.text_input("Search", placeholder="Search employee...", key="emp_search", label_visibility="collapsed")
+    st.write("")
+    
+    try:
+        conn_dir = sqlite3.connect("data/employee_data.db")
+        cur_dir = conn_dir.cursor()
+        cur_dir.execute("""
+            SELECT employee_id, name, department, COALESCE(remaining_hours, 0) as remaining_hours
+            FROM employees
+            ORDER BY employee_id
+        """)
+        dir_employees = cur_dir.fetchall()
+        conn_dir.close()
+        
+        search_lower = (search_query or "").strip().lower()
+        if search_lower:
+            filtered = [
+                e for e in dir_employees
+                if search_lower in (e[0] or "").lower()
+                or search_lower in (e[1] or "").lower()
+                or search_lower in (str(e[2] or "")).lower()
+            ]
+        else:
+            filtered = dir_employees
+        
+        for emp in filtered[:20]:  # Limit to 20 for performance
+            emp_id, name, dept, rem_hrs = emp
+            rem_days = round(rem_hrs / 8.0, 1)
+            with st.expander(f"**{emp_id}** · {name}"):
+                st.markdown(f"**ID:** {emp_id}")
+                st.markdown(f"**Name:** {name}")
+                st.markdown(f"**Remaining Days:** {rem_days}")
+                st.markdown(f"**Department:** {dept or '—'}")
+        if not filtered:
+            st.caption("No employees match your search.")
+    except Exception as ex:
+        st.caption(f"Directory unavailable: {str(ex)}")
+    
+    st.markdown("---")
+    
     st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
     st.markdown('### 🚀 Quick Actions')
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Table of all employees with remaining leave days (at top for visibility)
+    st.markdown('### 📊 All Employees - Leave Balance')
+    try:
+        conn_tbl = sqlite3.connect("data/employee_data.db")
+        cur_tbl = conn_tbl.cursor()
+        cur_tbl.execute("""
+            SELECT employee_id, COALESCE(remaining_hours, 0) as remaining_hours
+            FROM employees
+            ORDER BY employee_id
+        """)
+        emp_rows = cur_tbl.fetchall()
+        conn_tbl.close()
+        if emp_rows:
+            emp_data = [(r[0], round(r[1] / 8.0, 1)) for r in emp_rows]
+            df_emp = pd.DataFrame(emp_data, columns=["Employee ID", "Remaining Days"])
+            st.dataframe(df_emp, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No employees in database. Run populate_employees.py first.")
+    except Exception as ex:
+        st.warning(f"Table unavailable: {str(ex)}")
+    
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -382,6 +457,12 @@ with st.sidebar:
     st.markdown('### 👥 Employees')
     
     # Fetch all employees from database
+    FALLBACK_EMPLOYEES = [
+        ("EMP001", "John Smith", "Engineering", "Developer", 14, 112.0),
+        ("EMP002", "Jane Doe", "Marketing", "Specialist", 15, 120.0),
+        ("EMP003", "Bob Johnson", "Finance", "Analyst", 10, 80.0),
+        ("EMP004", "Alice Williams", "HR", "Coordinator", 10, 80.0),
+    ]
     try:
         conn = sqlite3.connect("data/employee_data.db")
         cursor = conn.cursor()
@@ -407,82 +488,66 @@ with st.sidebar:
         """)
         all_employees = cursor.fetchall()
         conn.close()
-        
-        # Display total count
-        st.markdown(f'**Total Employees: {total_count}**')
-        
-        # Display department breakdown
-        dept_breakdown = ", ".join([f"{dept} ({count})" for dept, count in dept_counts])
-        st.markdown(f'<small style="color: #64748b;">📊 Departments: {dept_breakdown}</small>', unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Display employee dropdown/selectbox
-        employee_options = {f"{emp[0]} - {emp[1]} ({emp[2]})": emp[0] for emp in all_employees}
-        employee_labels = list(employee_options.keys())
-        
-        # Get previously selected index or default to first
-        default_index = 0
-        if 'selected_employee_index' in st.session_state:
-            try:
-                default_index = st.session_state.selected_employee_index
-                if default_index >= len(employee_labels):
-                    default_index = 0
-            except:
-                default_index = 0
-        
-        selected_employee_label = st.selectbox(
-            "Select Employee:",
-            options=employee_labels,
-            index=default_index,
-            key="employee_selector",
-            help="Select an employee to view their details or submit a request"
-        )
-        selected_employee_id = employee_options[selected_employee_label]
-        st.session_state.selected_employee_id = selected_employee_id
-        st.session_state.selected_employee_index = employee_labels.index(selected_employee_label)
-        
-        # Show selected employee details
-        selected_emp = next((e for e in all_employees if e[0] == selected_employee_id), None)
-        if selected_emp:
-            emp_id, emp_name, emp_dept, emp_pos, emp_vac_days, emp_rem_hrs = selected_emp
-            st.markdown(f"""
-            <div class="employee-card" style="background: #e6f3ff; border-left: 4px solid #4a90e2;">
-                <strong>{emp_id}</strong> - {emp_name}<br>
-                <small>📁 {emp_dept} | {emp_pos}</small><br>
-                <small>📅 {emp_vac_days} days ({emp_rem_hrs} hours) remaining</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Collapsible full employee list
-        with st.expander(f"📋 View All Employees ({total_count} total)"):
-            st.markdown(f'<small style="color: #64748b;">All {total_count} employees from database</small>', unsafe_allow_html=True)
-            for emp_id, emp_name, emp_dept, emp_pos, emp_vac_days, emp_rem_hrs in all_employees:
-                is_manager = emp_id.startswith("MGR")
-                card_color = "#fff3cd" if is_manager else "#f8fafc"
-                border_color = "#ffc107" if is_manager else "#4a90e2"
-                badge = "👑" if is_manager else "👤"
-                st.markdown(f'''
-                <div class="employee-card" style="background: {card_color}; border-left: 3px solid {border_color}; margin: 0.25rem 0;">
-                    {badge} <strong>{emp_id}</strong> - {emp_name}<br>
-                    <small>📁 {emp_dept} | 💼 {emp_pos} | 📅 {emp_vac_days} days ({emp_rem_hrs} hrs)</small>
-                </div>
-                ''', unsafe_allow_html=True)
-        
     except Exception as e:
-        st.error(f"Error loading employees: {str(e)}")
-        st.info("Using sample employees as fallback")
-        # Fallback to hardcoded list
-        employees = [
-            ("EMP001", "John Smith", "7 days"),
-            ("EMP002", "Jane Doe", "15 days"),
-            ("EMP003", "Bob Johnson", "15 days"),
-            ("EMP004", "Alice Williams", "10 days"),
-        ]
-        for emp_id, name, days in employees:
-            st.markdown(f'<div class="employee-card"><strong>{emp_id}</strong> - {name}<br><small>📅 {days} vacation remaining</small></div>', unsafe_allow_html=True)
+        st.warning(f"Could not load employees: {str(e)}")
+        st.caption("Using sample data.")
+        all_employees = FALLBACK_EMPLOYEES
+        total_count = len(all_employees)
+        dept_counts = [("Sample", total_count)]
+    
+    # Display total count and employee list (uses all_employees from try or fallback)
+    st.markdown(f'**Total Employees: {total_count}**')
+    dept_breakdown = ", ".join([f"{dept} ({count})" for dept, count in dept_counts])
+    st.markdown(f'<small style="color: #64748b;">📊 Departments: {dept_breakdown}</small>', unsafe_allow_html=True)
+    st.markdown("---")
+    
+    employee_options = {f"{emp[0]} - {emp[1]} ({emp[2]})": emp[0] for emp in all_employees}
+    employee_labels = list(employee_options.keys())
+    default_index = 0
+    if 'selected_employee_index' in st.session_state:
+        try:
+            default_index = st.session_state.selected_employee_index
+            if default_index >= len(employee_labels):
+                default_index = 0
+        except:
+            default_index = 0
+    
+    selected_employee_label = st.selectbox(
+        "Select Employee:",
+        options=employee_labels,
+        index=default_index,
+        key="employee_selector",
+        help="Select an employee to view their details or submit a request"
+    )
+    selected_employee_id = employee_options[selected_employee_label]
+    st.session_state.selected_employee_id = selected_employee_id
+    st.session_state.selected_employee_index = employee_labels.index(selected_employee_label)
+    
+    selected_emp = next((e for e in all_employees if e[0] == selected_employee_id), None)
+    if selected_emp:
+        emp_id, emp_name, emp_dept, emp_pos, emp_vac_days, emp_rem_hrs = selected_emp
+        st.markdown(f"""
+        <div class="employee-card" style="background: #e6f3ff; border-left: 4px solid #4a90e2;">
+            <strong>{emp_id}</strong> - {emp_name}<br>
+            <small>📁 {emp_dept} | {emp_pos}</small><br>
+            <small>📅 {emp_vac_days} days ({emp_rem_hrs} hours) remaining</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    with st.expander(f"📋 View All Employees ({total_count} total)"):
+        st.markdown(f'<small style="color: #64748b;">All {total_count} employees from database</small>', unsafe_allow_html=True)
+        for emp_id, emp_name, emp_dept, emp_pos, emp_vac_days, emp_rem_hrs in all_employees:
+            is_manager = emp_id.startswith("MGR")
+            card_color = "#fff3cd" if is_manager else "#f8fafc"
+            border_color = "#ffc107" if is_manager else "#4a90e2"
+            badge = "👑" if is_manager else "👤"
+            st.markdown(f'''
+            <div class="employee-card" style="background: {card_color}; border-left: 3px solid {border_color}; margin: 0.25rem 0;">
+                {badge} <strong>{emp_id}</strong> - {emp_name}<br>
+                <small>📁 {emp_dept} | 💼 {emp_pos} | 📅 {emp_vac_days} days ({emp_rem_hrs} hrs)</small>
+            </div>
+            ''', unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -506,52 +571,82 @@ with st.sidebar:
 col1, col2 = st.columns([1.2, 1])
 
 with col1:
+    show_balance = st.toggle("👁️ Show Balance", value=False, key="balance_toggle")
+    
+    # Your Current Leave Balance section (outside form)
+    bal_employee_id = st.session_state.get("selected_employee_id")
+    if show_balance and bal_employee_id:
+        st.markdown("### 📊 Your Current Leave Balance")
+        try:
+            balance = st.session_state.db.get_remaining_balance(bal_employee_id, "vacation")
+            if "error" not in balance:
+                bal_col1, bal_col2, bal_col3 = st.columns(3)
+                with bal_col1:
+                    st.metric("📅 Remaining Days", f"{balance['remaining_days']:.1f}", help="Days of leave available")
+                with bal_col2:
+                    st.metric("⏱️ Remaining Hours", f"{balance['remaining_hours']:.0f}", help="Hours of leave available")
+                with bal_col3:
+                    st.metric("📋 Annual Quota", f"{balance['annual_quota_days']} days", help="Total annual allowance")
+            else:
+                st.warning(f"Could not load balance: {balance.get('error', 'Unknown error')}")
+        except Exception as e:
+            st.warning(f"Balance unavailable: {str(e)}")
+    elif show_balance and not bal_employee_id:
+        st.info("👈 **Please select an employee from the sidebar first**")
+        st.caption("Your leave balance will appear here")
+    st.write("")
+    
     st.markdown('<div class="form-container">', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">📝 Submit Leave Request</div>', unsafe_allow_html=True)
     
     with st.form("leave_request_form", clear_on_submit=False):
-        # Employee ID - get from sidebar selection or text input
-        selected_emp_id = st.session_state.get("selected_employee_id", "EMP001")
-        col_emp1, col_emp2 = st.columns([3, 1])
-        with col_emp1:
-            employee_id = st.text_input(
-                "👤 Employee ID", 
-                placeholder="e.g., EMP001", 
-                value=selected_emp_id, 
-                key="employee_id_input",
-                help="Enter your employee ID or select from sidebar"
+        st.header("📝 Submit Leave Request")
+        st.write("")
+        
+        left_col, right_col = st.columns(2)
+        
+        with left_col:
+            st.markdown('<div class="form-section-header">👤 Employee & Leave Type</div>', unsafe_allow_html=True)
+            st.write("")
+            selected_emp_id = st.session_state.get("selected_employee_id") or ""
+            emp_col1, emp_col2 = st.columns([3, 1])
+            with emp_col1:
+                employee_id = st.text_input(
+                    "👤 Employee ID",
+                    placeholder="e.g., EMP001",
+                    value=selected_emp_id,
+                    key="employee_id_input",
+                    help="Enter your employee ID or select from sidebar"
+                )
+            with emp_col2:
+                st.write("")
+                if st.form_submit_button("🔍", help="Quick lookup", use_container_width=True):
+                    st.session_state.show_balance = True
+            st.write("")
+            leave_type = st.selectbox("📋 Leave Type", ["vacation", "sick"], help="Select vacation or sick leave")
+            st.write("")
+            is_manager_request = st.checkbox(
+                "👑 Manager's leave request (auto-approve)",
+                value=employee_id.startswith("MGR") if employee_id else False,
+                help="Managers' leave requests are auto-approved per company policy"
             )
-        with col_emp2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.form_submit_button("🔍", help="Quick lookup", use_container_width=True):
-                st.session_state.show_balance = True
         
-        # Leave type with better styling
-        leave_type = st.selectbox("📋 Leave Type", ["vacation", "sick"], help="Select vacation or sick leave")
+        with right_col:
+            st.markdown('<div class="form-section-header">📅 Requested Dates</div>', unsafe_allow_html=True)
+            st.write("")
+            start_date = st.date_input("📅 Start Date", value=date.today() + timedelta(days=14), help="First day of leave")
+            st.write("")
+            end_date = st.date_input("📅 End Date", value=date.today() + timedelta(days=17), help="Last day of leave")
+            st.write("")
+            if start_date and end_date:
+                days_requested = (end_date - start_date).days + 1
+                biz_days = sum(1 for i in range(days_requested) if (start_date + timedelta(days=i)).weekday() < 5) if days_requested > 0 else 0
+                st.info(f"📊 **{days_requested}** calendar day{'s' if days_requested != 1 else ''} · **{biz_days}** business day{'s' if biz_days != 1 else ''}")
         
-        # Manager auto-approval checkbox
-        is_manager_request = st.checkbox(
-            "👑 Is this a manager's leave request?",
-            value=employee_id.startswith("MGR") if employee_id else False,
-            help="Managers' leave requests are auto-approved per company policy"
-        )
-        
-        # Date inputs with better layout
-        st.markdown("**📅 Requested Dates**")
-        col_date1, col_date2 = st.columns(2)
-        with col_date1:
-            start_date = st.date_input("Start Date", value=date.today() + timedelta(days=14), help="First day of leave")
-        with col_date2:
-            end_date = st.date_input("End Date", value=date.today() + timedelta(days=17), help="Last day of leave")
-        
-        # Calculate days
-        if start_date and end_date:
-            days_requested = (end_date - start_date).days + 1
-            if days_requested > 0:
-                st.info(f"📊 Total days requested: **{days_requested} day{'s' if days_requested != 1 else ''}**")
-        
-        # Submit button
-        submitted = st.form_submit_button("🚀 Process Request", use_container_width=True, type="primary")
+        st.write("")
+        st.write("")
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        with btn_col2:
+            submitted = st.form_submit_button("🚀 Process Request", use_container_width=True, type="primary")
         
         if submitted:
             if end_date < start_date:
@@ -676,9 +771,8 @@ with col1:
 
 # Results Column
 with col2:
+    st.markdown('<div class="section-header">🔄 Processing Flow</div>', unsafe_allow_html=True)
     if st.session_state.processing_steps:
-        st.markdown('<div class="section-header">🔄 Processing Flow</div>', unsafe_allow_html=True)
-        
         for i, step_info in enumerate(st.session_state.processing_steps):
             status_class = step_info.get("status", "")
             icon_map = {
@@ -699,6 +793,8 @@ with col2:
             # Add connector if not last
             if i < len(st.session_state.processing_steps) - 1:
                 st.markdown('<div class="flow-connector">↓</div>', unsafe_allow_html=True)
+    else:
+        st.info("Submit a request first to see the processing flow.")
 
 # Full-width results section
 if st.session_state.request_result:
@@ -707,8 +803,6 @@ if st.session_state.request_result:
     result = st.session_state.request_result
     status = result.get("status", "unknown")
     
-    # Debug: Show status (remove after testing)
-    # st.info(f"DEBUG: Current status = '{status}'")
     
     # NEW: Multi-Step Analysis Section (BEFORE approval/denial)
     if result.get("analysis_checks"):
@@ -1298,6 +1392,9 @@ if st.session_state.request_result:
             mime="text/plain",
             use_container_width=False
         )
+else:
+    st.markdown("---")
+    st.info("No active request. Submit a leave request to see results.")
 
 # Balance Query Modal
 if st.session_state.get("show_balance", False):
