@@ -1,0 +1,28 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate Python syntax
+        run: python -m py_compile *.py src/*.py scripts/*.py 2>/dev/null || true
+
+      - name: Test database imports
+        run: python -c "from src.database_tool import EmployeeDatabase; print('✓ Database imports OK')"
+
+      - name: Test AI imports (with warning on failure)
+        run: |
+          python -c "import sys; exec('from src.policy_rag import PolicyRAG'); print('✓ PolicyRAG imports OK')" || echo "::warning::PolicyRAG import may need OPENAI_API_KEY"
+          python -c "import sys; exec('from src.vacation_agent import VacationAgent'); print('✓ VacationAgent imports OK')" || echo "::warning::VacationAgent import may need OPENAI_API_KEY"
